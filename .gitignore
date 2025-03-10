@@ -1,6 +1,7 @@
-.virtualenv
 .files
 __pycache__
 /data
 .chainlit
 .DS_Store
+.venv
+/bunny_views
