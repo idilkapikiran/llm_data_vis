@@ -68,12 +68,12 @@ def recommend_visualizations(analysis):
 def main():
     st.title("Visualization Recommender")
     
-    uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
+    uploaded_file = st.file_uploader("Upload a 3D object file (i.e ply, obj)", type=["ply", "obj"])
     
     if uploaded_file:
-        df = pd.read_csv(uploaded_file)
-        st.write("### Preview of Data:")
-        st.write(df.head())
+       
+        st.write("### Rendered Multiview of Data:")
+        
         
         analysis = analyze_csv(df)
         st.write("### CSV Analysis:")
