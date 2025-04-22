@@ -5,3 +5,9 @@ __pycache__
 .DS_Store
 .venv
 /bunny_views
+/new
+/segmented_views
+/objects
+/render_views
+/views
+/models
