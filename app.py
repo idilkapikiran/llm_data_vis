@@ -24,25 +24,25 @@ def refine_input(user_input, object_caption, llm):
     # System prompt for the refinement task
     refinement_prompt = f"""
     You are a 3D object segmentation assistant. Your task is to:
-    1. Analyze the user's requested object part against the actual object description
-    2. Extract the core component/part name (e.g., "ear" from "bunny's ear")
-    3. Validate if the part makes sense for this object
+    1. Extract the core component/part name (e.g., "ear" from "I want to segment bunny's ear")
+    2. Analyze the user's requested object part against the actual object description and validate if the part makes sense for this object and if not output "None" (e.g., "ear" from "I want to segment chairs ear").
+    3. If there are mutliple parts, return the parts with a dot following one other (e.g., "ear. leg." from "I want to segment bunny's ear and leg").
     
     Object Description: {object_caption}
     User Request: {user_input}
     
     Examples:
-    1. If object is "a cat" and request is "bunny's ear":
-    <Part>ear</Part>
-    <Validation>This appears to be a cat rather than a bunny. I'll segment the ear.</Validation>
-    
-    2. If object is "a chair" and request is "the back support":
+    1. If object is "a chair" and request is "the back support":
     <Part>back support</Part>
-    <Validation>None</Validation>
+    <Validation>Segmenting the back support from the chair.</Validation>
     
-    3. If object is "a car" and request is "the ears":
+    2. If object is "a car" and request is "the ears":
     <Part>None</Part>
     <Validation>Cars don't have ears. Did you mean mirrors, antennas, or another part?</Validation>
+
+    3. If object is "a bunny" and request is "the ear and the leg":
+    <Part>ear. leg.</Part>
+    <Validation>Segmenting the ear and leg from the bunny.</Validation>
     """
     
     # Get LLM response
@@ -51,7 +51,9 @@ def refine_input(user_input, object_caption, llm):
     # Parse the response
     try:
         part = response.split("<Part>")[1].split("</Part>")[0].strip().lower()
+        print('PART', part)
         validation = response.split("<Validation>")[1].split("</Validation>")[0].strip()
+        print('VALIDATION', validation)
         if validation.lower() == "none":
             validation = None
     except:
@@ -66,8 +68,8 @@ def refine_input(user_input, object_caption, llm):
 
 @st.cache_resource()
 def load_and_save_model():
-    model_path = Path("./local_model_3B")
-    tokenizer_path = Path("./local_model_3B/tokenizer")
+    #model_path = Path("./local_model_3B")
+    #tokenizer_path = Path("./local_model_3B/tokenizer")
 
     #if model_path.exists() and tokenizer_path.exists():
     #    print('here')
@@ -102,9 +104,9 @@ def chat():
         if object_caption:
             st.write("### Object Caption:")
             st.write(object_caption)
-        while not object_caption: # test it out
+        while not object_caption:
             st.error("Failed to generate object caption. Please check the file format and try again.")
-            uploaded_file = st.file_uploader("Upload a 3D object file (i.e ply, obj)", type=["ply", "obj"])
+            uploaded_file = st.file_uploader("Upload a 3D object file (i.e ply, obj)", type=["ply, obj"])
 
     # Initialize messages if not in session state
     if "messages" not in st.session_state:
@@ -122,14 +124,14 @@ def chat():
         st.chat_message("user").write(user_input)
 
         # Segment the object based on the refined input
-        #refined_input = refine_input(user_input, object_caption, llm)
-        print('REFINED INPUT', user_input)
+        refined_input = refine_input(user_input, object_caption, llm)
+        print('REFINED INPUT', refined_input)
         
-        segmentations = segment_and_save_views(user_input, mesh_name)
+        segmentations = segment_and_save_views(refined_input, mesh_name)
 
         if segmentations:
             for i, segmentation in enumerate(segmentations):
-                st.image(segmentation, caption=f"Segmented View {i+1}", use_column_width=True)
+                st.image(segmentation, caption=f"Segmented View {i+1}", use_container_width=True)
             # Set up the embeddings and retriever for the conversation
             #embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
             #vectorstore = FAISS.from_texts(segmentations, embeddings)

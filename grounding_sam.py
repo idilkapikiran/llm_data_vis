@@ -16,7 +16,6 @@ CONFIG_PATH = "./Grounded_Segment_Anything/GroundingDINO/groundingdino/config/Gr
 CHECKPOINT_PATH = "./models/groundingdino_swint_ogc.pth"
 SAM_CHECKPOINT = "./models/sam_vit_h_4b8939.pth"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-#TEXT_PROMPT = "ear"
 BOX_THRESHOLD = 0.3
 TEXT_THRESHOLD = 0.25
 VIEWS_DIR = "./render_views"
@@ -92,44 +91,40 @@ def get_masks_only(boxes, image_source, image_rgb):
 def render_views(mesh, mesh_name):
     angles = [0, 45, 90, 135, 180]
     
-    # Create offscreen renderer
-    width, height = 640, 480  # You can change resolution
+    width, height = 640, 480
     renderer = o3d.visualization.rendering.OffscreenRenderer(width, height)
 
-    # Set up material for rendering
     material = o3d.visualization.rendering.MaterialRecord()
-    material.shader = "default"
-
-    # Setup scene for the renderer
     scene = renderer.scene
-    scene.set_background([1.0, 1.0, 1.0, 1.0])  # White background
+    scene.set_background([1.0, 1.0, 1.0, 1.0])
     scene.add_geometry(mesh_name, mesh, material)
 
-    # Set up the camera properties
     bounds = mesh.get_axis_aligned_bounding_box()
     center = bounds.get_center()
-    extent = bounds.get_extent().max()
-    scene.camera.look_at(center, center + [0, 0, 1], [0, 1, 0])
-    scene.camera.set_projection(60.0, width / height, 0.1, 1000.0)
 
-    # Render views from different angles
+    radius = np.linalg.norm(bounds.get_extent()) * 2
+    up = [0, 1, 0]
+
     for i, angle in enumerate(angles):
         radians = np.deg2rad(angle)
-        x = math.sin(radians)
-        z = math.cos(radians)
-        front = [x, 0, z]
-        
-        # Set the camera to the new angle
-        scene.camera.set_front(front)
+        cam_position = [
+            center[0] + radius * math.sin(radians),
+            center[1],
+            center[2] + radius * math.cos(radians)
+        ]
 
-        img = renderer.render_to_image()
+        scene.camera.look_at(center, cam_position, up)
         
+        img = renderer.render_to_image()
+
         VIEWS_DIR_OBJ = os.path.join(VIEWS_DIR, mesh_name)
-        filename = f"{VIEWS_DIR_OBJ}/{mesh_name}_view_{i}.png"
+        os.makedirs(VIEWS_DIR_OBJ, exist_ok=True)
+        filename = os.path.join(VIEWS_DIR_OBJ, f"{mesh_name}_view_{i}.png")
         o3d.io.write_image(filename, img)
         print(f"Saved: {filename}")
 
     print(f"All views rendered and saved in {VIEWS_DIR_OBJ}")
+
 
 def render_file_view(obj_file, mesh_name):
     mesh = o3d.io.read_triangle_mesh(obj_file)
@@ -158,7 +153,9 @@ def caption_object(obj_file):
     #VLM to identify object
     processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
     model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(DEVICE)
-    image_path = os.path.join(VIEWS_DIR, mesh_name, "view_0.png")
+    files = os.listdir(os.path.join(VIEWS_DIR, mesh_name))
+    first_file = files[0]
+    image_path = os.path.join(VIEWS_DIR, mesh_name, first_file)
     image = Image.open(image_path).convert("RGB")
     inputs = processor(image, return_tensors="pt").to(DEVICE)
     out = model.generate(**inputs)
@@ -182,12 +179,11 @@ def segment_and_save_views(seg_prompt, mesh_name):
         view_path = os.path.join(VIEWS_DIR_OBJ, view_file)
         
         try:
-            # Load and prepare image
+             # Load and prepare image
             image_source, image = load_image(view_path)
-            image_rgb = cv2.cvtColor(image_source, cv2.COLOR_BGR2RGB)
 
             # Get boxes from GroundingDINO
-            boxes, logits, _ = predict(
+            boxes, logits, phrases = predict(
                 model=groundingdino_model,
                 image=image,
                 caption=seg_prompt,
@@ -195,11 +191,10 @@ def segment_and_save_views(seg_prompt, mesh_name):
                 text_threshold=TEXT_THRESHOLD,
                 device=DEVICE
             )
-            
+
             if len(boxes) == 0:
-                print(f"No objects detected in {view_file}")
+                print(f"No object parts detected in {view_file}")
                 continue
-            
 
             # Save results
             base_name = os.path.splitext(view_file)[0]
@@ -209,21 +204,20 @@ def segment_and_save_views(seg_prompt, mesh_name):
                 image_source=image_source,
                 boxes=boxes,
                 logits=logits,
-                phrases=[seg_prompt]*len(boxes)
+                phrases=phrases
             )
-        
-            segmented_frame_masks = segment(image_source, sam_predictor, boxes=boxes)
-            annotated_frame_with_mask = draw_mask(segmented_frame_masks[0][0], annotated)
-            masked = get_masks_only(boxes, image_source, image_rgb)
-            OUTPUT_DIR_OBJ = os.path.join(OUTPUT_DIR, mesh_name)
-            if not os.path.exists(OUTPUT_DIR_OBJ):
-                os.makedirs(OUTPUT_DIR_OBJ)
-            cv2.imwrite(os.path.join(OUTPUT_DIR_OBJ, f"{base_name}_annotated.png"), annotated)
-            cv2.imwrite(os.path.join(OUTPUT_DIR_OBJ, f"{base_name}_highlighted.png"), annotated_frame_with_mask)
-            highlighted_on_original = extract_segmented_object(image_source, masked)
-            cv2.imwrite(os.path.join(OUTPUT_DIR_OBJ, f"{base_name}_masked_overlay.png"), highlighted_on_original)
+            annotated = annotated[...,::-1]
 
-            view_list.append(highlighted_on_original)
+            segmented_frame_masks = segment(image_source, sam_predictor, boxes=boxes)
+            mask = segmented_frame_masks[0][0].cpu().numpy()
+            annotated_frame_with_mask = draw_mask(segmented_frame_masks[0][0], annotated)
+            binary_mask = (mask > 0).astype(np.uint8) * 255
+
+            cv2.imwrite(os.path.join(OUTPUT_DIR, f"{base_name}_annotated.png"), annotated)
+            cv2.imwrite(os.path.join(OUTPUT_DIR, f"{base_name}_highlighted.png"), annotated_frame_with_mask)
+            highlighted_on_original = extract_segmented_object(image_source, binary_mask)
+            cv2.imwrite(os.path.join(OUTPUT_DIR, f"{base_name}_masked_overlay.png"), highlighted_on_original)
+
             print(f"Saved results for {view_file}")
         
         except Exception as e:
